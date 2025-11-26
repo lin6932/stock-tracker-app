@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>持仓股价自动追踪器</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f4f7f6; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h1 { color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #007bff; color: white; position: sticky; top: 0; }
+        .price-up { color: green; font-weight: bold; }
+        .price-down { color: red; font-weight: bold; }
+        .price-neutral { color: gray; }
+        .last-update { margin-top: 15px; font-size: 0.9em; color: #666; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>lin6932 持仓统计 (实时股价)</h1>
+    
+    <table id="stockTable">
+        <thead>
+            <tr>
+                <th>持股公司</th>
+                <th>股票代码</th>
+                <th>当前股价 (RMB/HKD)</th>
+                <th>总股本 (亿股)</th>
+                </tr>
+        </thead>
+        <tbody>
+            </tbody>
+    </table>
+
+    <div class="last-update">
+        <p>上次更新时间: <span id="updateTime">--</span></p>
+        <p>数据源示例: 新浪财经公开接口结构 (仅作演示，实际应用请替换为稳定API)</p>
+    </div>
+</div>
+
+<script>
+    // ** 1. 定义您的持仓股票列表 **
+    // 股票代码非常重要，请根据您的持仓公司补全正确的代码
+    // 注意：港股代码前缀一般为 'hk'，美股为 'us'，A股为 'sh' 或 'sz'
+    const STOCKS = [
+        { 
+            name: "腾讯控股", 
+            code: "hk00700", // 港股代码
+            totalShares: 96.09, // 总股本（亿股），建议手动录入静态数据
+            dataId: "row_00700"
+        },
+        // ** 请将您的其他持仓公司添加到这里 **
+        // { name: "某公司A", code: "sh600000", totalShares: 50, dataId: "row_600000" },
+        // { name: "某公司B", code: "usAAPL", totalShares: 155, dataId: "row_AAPL" },
+    ];
+
+    const tableBody = document.querySelector('#stockTable tbody');
+
+    // ** 2. 渲染初始表格结构 **
+    function renderTable() {
+        tableBody.innerHTML = ''; // 清空现有内容
+        STOCKS.forEach(stock => {
+            const row = tableBody.insertRow();
+            row.id = stock.dataId;
+            row.innerHTML = `
+                <td>${stock.name}</td>
+                <td>${stock.code.toUpperCase().replace(/^(HK|SH|SZ|US)/, '')}</td>
+                <td class="price" data-prev-price="0">--</td>
+                <td>${stock.totalShares ? stock.totalShares.toFixed(2) : '--'}</td>
+                `;
+        });
+    }
+
+    // ** 3. 获取实时股价数据并更新表格 **
+    async function fetchAndUpdatePrices() {
+        const stockCodes = STOCKS.map(s => s.code).join(',');
+        
+        // ** 替换此 URL 为您实际使用的稳定 API 接口 **
+        // 此处使用的新浪财经接口结构 (http://hq.sinajs.cn/list=...) 仅作演示
+        const API_URL = `http://hq.sinajs.cn/list=${stockCodes}`;
+
+        try {
+            // 由于浏览器安全限制 (CORS)，此 API_URL 可能会在本地文件 (file://) 中无法工作
+            // 您可能需要将此文件部署到 Web 服务器上，或者使用支持 CORS 的 API
+            const response = await fetch(API_URL);
+            const data = await response.text();
+            
+            // 解析数据
+            const lines = data.split(';');
+            
+            lines.forEach(line => {
+                if (!line.includes('=')) return;
+                
+                // 示例：var hq_hk00700="腾讯控股,264.800,265.200,264.600,265.000,265.400,265.400,0,0,14781602,3931652870.000,265.000,0,265.000,0,265.400,0,265.600,0,265.800,0,13:46:25,2025-11-26,00";
+                const match = line.match(/var hq_(\w+)="(.*)"/);
+                if (!match) return;
+
+                const codeKey = match[1];
+                const parts = match[2].split(',');
+                
+                // 腾讯控股 (港股) 股价通常在第7个位置 (parts[6])，但不同市场和API可能不同
+                // 港股 (hk): parts[6] 为最新价
+                // A股 (sh/sz): parts[3] 为最新价
+                let latestPrice = null;
+                if (codeKey.startsWith('hk')) {
+                    latestPrice = parseFloat(parts[6]);
+                } else if (codeKey.startsWith('sh') || codeKey.startsWith('sz')) {
+                    latestPrice = parseFloat(parts[3]);
+                } else {
+                     // 假设美股或其他市场的最新价在某个固定位置
+                     // 此处需要根据实际API调整
+                     latestPrice = parseFloat(parts[3]); 
+                }
+                
+                if (isNaN(latestPrice) || latestPrice === 0) return;
+
+                const stock = STOCKS.find(s => s.code.replace(/^(hk|sh|sz|us)/, '').toLowerCase() === codeKey.replace(/^(hk|sh|sz|us)/, '').toLowerCase());
+                if (!stock) return;
+
+                const row = document.getElementById(stock.dataId);
+                const priceCell = row.querySelector('.price');
+                const prevPrice = parseFloat(priceCell.getAttribute('data-prev-price'));
+                
+                // 价格更新和颜色标记
+                let className = 'price-neutral';
+                if (latestPrice > prevPrice && prevPrice !== 0) {
+                    className = 'price-up';
+                } else if (latestPrice < prevPrice && prevPrice !== 0) {
+                    className = 'price-down';
+                }
+
+                priceCell.textContent = latestPrice.toFixed(2);
+                priceCell.className = `price ${className}`;
+                priceCell.setAttribute('data-prev-price', latestPrice);
+
+            });
+
+            document.getElementById('updateTime').textContent = new Date().toLocaleTimeString();
+            
+        } catch (error) {
+            console.error("获取股价数据失败:", error);
+            document.getElementById('updateTime').textContent = `失败 - ${new Date().toLocaleTimeString()}`;
+            // 可以在这里添加一个用户友好的错误提示
+        }
+    }
+
+    // ** 4. 初始化和设置定时刷新 **
+    renderTable(); // 首次渲染表格
+    fetchAndUpdatePrices(); // 首次获取数据
+
+    // 设置每 10 秒刷新一次 (10000 毫秒)
+    const refreshInterval = 10000; 
+    setInterval(fetchAndUpdatePrices, refreshInterval);
+
+</script>
+
+</body>
+</html>
